@@ -1,60 +1,96 @@
-# Vectorized Context
+# vectorized-context-rag
 
-> Nota: El proyecto es funcional, pero la documentación del mismo aún se encuentra en proceso. De momento, solo se ha definido el objetivo y alcance del mismo. Sin embargo, siguiendo los comentarios en el código, así como el artículo que dio origen a este repositorio: ['Embeddings and Vector Databases With ChromaDB'](https://realpython.com/chromadb-vector-database/#represent-data-as-vectors) es posible entender su lógica.
-> Durante los próximos días terminaré de documentar este README.
+Chatbot de consola para hacer RAG sobre reviews de autos usando embeddings, ChromaDB y OpenAI. El dataset incluido proviene de [Kaggle](https://www.kaggle.com/datasets/ankkur13/edmundsconsumer-car-ratings-and-reviews) y la idea original del ejercicio está inspirada en el artículo de Real Python sobre ChromaDB.
 
-![image](https://miro.medium.com/v2/resize:fit:793/0*RTW5byy6eH_eSWTP.png)
+El flujo del proyecto ahora quedó separado en dos pasos:
 
-El siguiente repositorio es un chatbot de consola que funciona como aplicación técnica de los casos de uso presentados en el artículo ['Embeddings and Vector Databases With ChromaDB'](https://realpython.com/chromadb-vector-database/#represent-data-as-vectors) de realpython.com. Su objetivo es brindar un acceso sencillo al caso de uso explicado, demostrando cómo los conceptos teóricos del Álgebra Vectorial pueden emplearse para vectorizar documentos (en este caso, texto), integrándolos en bases de datos vectoriales como ChromaDB. Esto permite generar comparaciones semánticas que se utilizarán para proporcionar el contexto adecuado al modelo de LLM, GPT-3.5 Turbo de OpenAI, con el fin de obtener respuestas específicas según los datos con los que se alimente el modelo.
+1. `ingest`: procesa los CSV, genera embeddings e indexa las reviews en ChromaDB.
+2. `chat`: consulta la colección vectorial y usa OpenAI para responder preguntas con ese contexto. Si no hay API key, no hay conectividad o se usa `--offline`, devuelve el contexto recuperado localmente.
 
-El dataset utilizado para generar las colecciones de ChromaDB se obtuvo de [Kaggle](https://www.kaggle.com/datasets/ankkur13/edmundsconsumer-car-ratings-and-reviews) y corresponde a un conjunto de datos que contiene la opinión del consumidor y la calificación en estrellas por fabricante/modelo/tipo de automóvil según el sitio de venta de autos usados edmunds.com. El objetivo de este chatbot es que, según la información de las reviews contenidas en el sitio, pueda resolver dudas específicas sobre modelos, marcas o tipos de vehículos, orientando sus respuestas al consumidor.
+## Requisitos
 
-En caso de tener alguna sugerencia, o corrección para el proyecto, feel free to contribute.
+- Python 3.9 o superior
+- Un entorno virtual recomendado
+- API key de OpenAI solo para respuestas generadas por el LLM
 
----
+## Instalación
 
-### Requerimientos:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-Como en cualquier proyecto, idealmente, ni bien se clone el repositorio es conveniente generar un entorno virtual en el cual se instalarán las dependencias contenidas en el archivo `requirements.txt`. Asimismo, es necesario generar un archivo `config.json`, el cual albergará la secret key utilizada para conectarse a la API de OpenAI.
+## Configuración
 
-El archivo `config.json` debe componerse de la siguiente forma:
+Podés usar variables de entorno:
+
+```bash
+export OPENAI_API_KEY="tu-openai-api-key"
+export OPENAI_MODEL="gpt-4o-mini"
+```
+
+O crear un `config.json` a partir de `config.example.json`:
 
 ```json
 {
-  "openai-secret-key": "tu-secret-key"
+  "openai-secret-key": "tu-openai-api-key",
+  "openai-model": "gpt-4o-mini"
 }
 ```
 
-En caso de no contar con créditos disponibles de OpenAI, no hay problema, ya que el fin de este caso de estudio es mostrar cómo funcionan los embeddings para convertir información compleja, como palabras, imágenes o documentos, en vectores en un espacio multidimensional que facilite la comparación y el análisis de datos mediante el cálculo del coseno. Dichas funciones se encuentran en los módulos `car_data_etl.py` y `chroma_utils.py` y se explican más en detalle en este README; sin embargo, sin créditos de OpenAI, el contexto generado no se podrá servir al LLM, por lo que la funcionalidad de chat no estará disponible.
+Si no tenés créditos de OpenAI, igual podés ejecutar `ingest` para explorar la parte de ETL y vectorización. Además, `chat` puede funcionar en modo local mostrando las reviews más relevantes sin llamar a OpenAI.
 
----
+## Uso
 
-## Modulos
+Construir la colección vectorial:
 
-#### car_data_etl
-
-Este módulo proporciona una función para preparar datos de las revisiones de autos para su indexación en ChromaDB. La función prepare_car_reviews_data toma un archivo de datos de revisiones de autos y devuelve un diccionario que contiene los identificadores únicos, textos de revisión y metadatos asociados para cada revisión de autos de la siguiente forma:
-
-```json
-{
-  "ids": ["review12", "review13", "review14"],
-  "documents": [
-    "Last hybrid I by from Kia. 2016 Kia Optima Hybrid Sedan EX 4dr Sedan (2.4L 4cyl gas/electric hybrid 6A). No so high-brid, 25mpg in the city 33 hwy on the 2016 ex hybrid. Taken it in twice stating poor mpg and was told it's just not broken in yet. I have 10k on it when is it going to break in?  Liars!!",
-    "A hybrid with good styling. If you are wanting a hybrid, but don't want the ugly as dog poop Prius, this is a car for you to check out.",
-    "Love the 2016 Kia Optima Hybrid (even more than th). They changed the interior in the 2017. They did improve the comfort of the seats/headrest, but for me, they went backwards in terms of the interior styling- very bland and generic."
-  ],
-  "metadatas": [
-    { "Author": "Ken", "Rating": 5 },
-    { "Author": "Tod Bowermaster", "Rating": 5 },
-    { "Author": "Nick", "Rating": 3 }
-  ]
-}
+```bash
+python3 app.py ingest
 ```
 
-lo que hace la función prepare_car_reviews_data es procesar un archivo CSV con datos de revisiones de autos, filtrar las revisiones según los años de vehículos especificados, y devolver los datos en un formato adecuado para la indexación en ChromaDB generando identificadores únicos, extrayendo y limpiando textos de revisiones asi como dandoles estructura.
+Indexar varios años:
 
-#### chroma_utils
+```bash
+python3 app.py ingest --years 2016 2017 2018
+```
 
----
+Reutilizar una colección existente sin recrearla:
 
-## Ejecución
+```bash
+python3 app.py ingest --keep-existing
+```
+
+Abrir el chat interactivo:
+
+```bash
+python3 app.py chat
+```
+
+Abrir el chat en modo local, sin llamadas a OpenAI:
+
+```bash
+python3 app.py chat --offline
+```
+
+Hacer una sola pregunta y salir:
+
+```bash
+python3 app.py chat --question "What do owners think about the Volkswagen New Beetle?"
+```
+
+## Estructura
+
+- `app.py`: CLI principal para `ingest` y `chat`
+- `car_data_etl.py`: limpieza y preparación del dataset
+- `chroma_utils.py`: creación y acceso a la colección de ChromaDB
+- `data/archive/`: CSV originales del dataset
+
+## Mejoras aplicadas
+
+- Se corrigió el batching de inserción en ChromaDB para no perder documentos al final de cada lote.
+- Se migró la integración de OpenAI al cliente moderno.
+- Se separó la indexación del chat para evitar reconstruir la base en cada ejecución.
+- Se agregó un modo offline y fallback automático a contexto local cuando OpenAI no está disponible.
+- Se mejoró el manejo de configuración y errores.
+- Se simplificó `requirements.txt` a dependencias directas.

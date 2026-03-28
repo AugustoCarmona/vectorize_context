@@ -1,0 +1,4 @@
+{
+  "openai-secret-key": "tu-openai-api-key",
+  "openai-model": "gpt-4o-mini"
+}

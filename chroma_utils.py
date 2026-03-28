@@ -1,7 +1,64 @@
 import pathlib
-import chromadb
-from chromadb.utils import embedding_functions
-from more_itertools import batched
+from typing import Iterator, Sequence
+
+
+def batched_records(
+    ids: Sequence[str],
+    documents: Sequence[str],
+    metadatas: Sequence[dict],
+    batch_size: int = 166,
+) -> Iterator[tuple[list[str], list[str], list[dict]]]:
+    if batch_size <= 0:
+        raise ValueError("batch_size debe ser mayor a cero.")
+
+    total_records = len(documents)
+    if len(ids) != total_records or len(metadatas) != total_records:
+        raise ValueError("ids, documents y metadatas deben tener la misma longitud.")
+
+    for start_idx in range(0, total_records, batch_size):
+        end_idx = min(start_idx + batch_size, total_records)
+        yield (
+            list(ids[start_idx:end_idx]),
+            list(documents[start_idx:end_idx]),
+            list(metadatas[start_idx:end_idx]),
+        )
+
+
+def build_embedding_function(embedding_func_name: str):
+    from chromadb.utils import embedding_functions
+
+    return embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name=embedding_func_name
+    )
+
+
+def list_collection_names(chroma_client) -> set[str]:
+    collection_names: set[str] = set()
+    for collection in chroma_client.list_collections():
+        collection_names.add(collection.name if hasattr(collection, "name") else collection)
+    return collection_names
+
+
+def get_collection(
+    chroma_path: pathlib.Path,
+    collection_name: str,
+    embedding_func_name: str,
+):
+    import chromadb
+
+    chroma_client = chromadb.PersistentClient(str(chroma_path))
+    available_collections = list_collection_names(chroma_client)
+
+    if collection_name not in available_collections:
+        raise RuntimeError(
+            f"La colección {collection_name} no existe en {chroma_path}. Ejecutá `python3 app.py ingest`."
+        )
+
+    return chroma_client.get_collection(
+        name=collection_name,
+        embedding_function=build_embedding_function(embedding_func_name),
+    )
+
 
 def build_chroma_collection(
     chroma_path: pathlib.Path,
@@ -11,52 +68,50 @@ def build_chroma_collection(
     documents: list[str],
     metadatas: list[dict],
     distance_func_name: str = "cosine",
-):
+    *,
+    reset: bool = True,
+    batch_size: int = 166,
+) -> int:
     """
-    Crea una colección en ChromaDB utilizando un modelo de embedding específico para indexar documentos.
-
-    Args:
-        chroma_path (pathlib.Path): Ruta donde se almacenará ChromaDB.
-        collection_name (str): Nombre de la colección a crear.
-        embedding_func_name (str): Nombre del modelo de embedding a utilizar para convertir documentos en vectores.
-        ids (list[str]): Lista de identificadores únicos para cada documento.
-        documents (list[str]): Lista de documentos a indexar.
-        metadatas (list[dict]): Lista de metadatos asociados a cada documento.
-        distance_func_name (str, opcional): Función de distancia para calcular similitudes entre documentos.
-
-    Returns:
-        None
-
-    Raises:
-        ChromaDBError: Si hay un problema al interactuar con ChromaDB.
+    Crea o actualiza una colección en ChromaDB utilizando un modelo de embeddings.
     """
-    chroma_client = chromadb.PersistentClient(chroma_path)
+    import chromadb
 
-    # modelo que transformara los documentos en vectores
-    embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=embedding_func_name
-    )
+    if not documents:
+        raise ValueError("No hay documentos para indexar.")
 
-    # para calcular la distancia entre vectores se utilizara distancia de coseno (valor por defecto)
-    # al representar cada vector de embedding una review de cliente, cuanto menor sea la distancia
-    # sinoidal entre dos vectores, mayor sera la relacion entre los documentos, por lo que el contexto
-    # sera relevante
-    collection = chroma_client.create_collection(
-        name=collection_name,
-        embedding_function=embedding_func,
-        metadata={"hnsw:space": distance_func_name},
-    )
+    chroma_client = chromadb.PersistentClient(str(chroma_path))
+    existing_collections = list_collection_names(chroma_client)
 
-    document_indices = list(range(len(documents)))
+    if reset and collection_name in existing_collections:
+        chroma_client.delete_collection(collection_name)
+        existing_collections.remove(collection_name)
 
-    # itera los indices de los documentos en lotes de 166 elementos
-    # agregando los documentos del lote actual a la coleccion
-    for batch in batched(document_indices, 166):
-        start_idx = batch[0]
-        end_idx = batch[-1]
+    embedding_func = build_embedding_function(embedding_func_name)
 
-        collection.add(
-            ids=ids[start_idx:end_idx],
-            documents=documents[start_idx:end_idx],
-            metadatas=metadatas[start_idx:end_idx],
+    if collection_name in existing_collections:
+        collection = chroma_client.get_collection(
+            name=collection_name,
+            embedding_function=embedding_func,
         )
+    else:
+        collection = chroma_client.create_collection(
+            name=collection_name,
+            embedding_function=embedding_func,
+            metadata={"hnsw:space": distance_func_name},
+        )
+
+    write_batch = getattr(collection, "upsert", None) or collection.add
+
+    total_indexed = 0
+    for batch_ids, batch_documents, batch_metadatas in batched_records(
+        ids, documents, metadatas, batch_size=batch_size
+    ):
+        write_batch(
+            ids=batch_ids,
+            documents=batch_documents,
+            metadatas=batch_metadatas,
+        )
+        total_indexed += len(batch_ids)
+
+    return total_indexed
